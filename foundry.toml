@@ -1,6 +1,21 @@
 [profile.default]
-src = "src"
+src = "src" # << THIS IS IMPORTANT. Contracts are in the 'src' directory.
 out = "out"
 libs = ["lib"]
+test = "test"
+script = "script"
+cache_path = "cache_forge"
+# See more config options https://github.com/foundry-rs/foundry/tree/master/config
 
-# See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
+# Example: Set default Solidity optimizer runs
+optimizer = true
+optimizer_runs = 200
+
+# Example Arbitrum Sepolia profile
+[rpc_endpoints]
+# Replace with your actual RPC URL, loaded from .env
+arbitrumSepolia = "${ARB_SEPOLIA_RPC_URL}"
+
+[etherscan]
+# Replace with your Arbiscan API Key, loaded from .env
+arbitrumSepolia = { key = "${ARBISCAN_API_KEY}", chain = 421614, url = "https://api-sepolia.arbiscan.io/api" } # Chain ID for Arbitrum Sepolia is 421614

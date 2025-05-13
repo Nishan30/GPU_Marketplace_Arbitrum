@@ -23,17 +23,22 @@ contract DeployContracts is Script {
         vm.startBroadcast(deployerPrivateKey);
 
         // Deploy GPUCredit token
-        GPUCredit gpuCredit = new GPUCredit("GPU Credit Test", "GPCT");
+        GPUCredit gpuCredit = new GPUCredit("TensorHive", "THT");
         console.log("GPUCredit deployed to:", address(gpuCredit));
 
         // Deploy ProviderRegistry, passing the GPUCredit token address
         ProviderRegistry registry = new ProviderRegistry(address(gpuCredit), admin, initialSlasher, initialRater);
         console.log("ProviderRegistry deployed to:", address(registry));
 
-        // Example: Set slashed funds recipient if different from admin
-        // address someOtherRecipient = address(0x...); // Replace with actual address
-        // registry.setSlashedFundsRecipient(someOtherRecipient);
-        // console.log("Slashed funds recipient set to:", someOtherRecipient);
+        // Deploy JobManager
+        JobManager jobManager = new JobManager(address(registry), address(gpuCredit), admin);
+        console.log("JobManager deployed to:", address(jobManager));
+
+        // Grant JobManager necessary roles on ProviderRegistry
+        // This assumes 'admin' is the DEFAULT_ADMIN_ROLE on ProviderRegistry
+        registry.grantRole(registry.RATER_ROLE(), address(jobManager));
+        // registry.grantRole(registry.SLASHER_ROLE(), address(jobManager)); // If JobManager uses slash
+        console.log("JobManager granted RATER_ROLE on ProviderRegistry");
 
         vm.stopBroadcast();
     }
