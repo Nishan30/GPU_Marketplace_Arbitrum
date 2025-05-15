@@ -1,10 +1,11 @@
 // test/ProviderRegistry.t.sol
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.20; // Match your ProviderRegistry.sol pragma
+pragma solidity ^0.8.24; // Match your ProviderRegistry.sol pragma
 
 import "forge-std/Test.sol";
 import "src/GPUCredit.sol";
 import "src/ProviderRegistry.sol"; // We will inherit from this
+import "@openzeppelin/contracts/access/AccessControl.sol"; // Import AccessControl for its error selector
 
 // Make the test contract inherit from ProviderRegistry to bring events into scope
 contract ProviderRegistryTest is Test, ProviderRegistry {
@@ -14,41 +15,33 @@ contract ProviderRegistryTest is Test, ProviderRegistry {
 
     // --- Users ---
     address public admin = address(0x1);
-    address public jobManagerPlaceholder = address(0x2); // Will act as slasher/rater
+    address public slasherRater = address(0x2); // Will act as slasher/rater
     address public provider1 = address(0x3);
     address public provider2 = address(0x4);
-    // `slashedFundsRecipient` is inherited from ProviderRegistry.
-    // We will set it on `registryInstance` in setUp.
+    address public slashedFundsRecipientActual = address(0x5); // Defined recipient for tests
 
     // --- Constants ---
     uint256 constant INITIAL_MINT_TO_PROVIDER = 1_000_000 * 1e18;
     uint256 constant STAKE_AMOUNT = 1000 * 1e18;
 
     // Constructor for ProviderRegistry (from which we inherit)
-    // Provide dummy values, as we primarily interact with `registryInstance`.
     constructor() ProviderRegistry(address(0), address(0), address(0), address(0)) {}
 
+
     function setUp() public {
-        // Deployer / Admin
         vm.startPrank(admin);
-
-        // 1. Deploy GPUCredit
         gpuCredit = new GPUCredit("Test GPU Credit", "TGPUC");
-
-        // 2. Deploy ProviderRegistry INSTANCE using GPUCredit for staking
-        registryInstance = new ProviderRegistry(address(gpuCredit), admin, jobManagerPlaceholder, jobManagerPlaceholder);
-        
-        // Set the slashedFundsRecipient for the test instance
-        address testInstanceSlashedFundsRecipient = address(0x5); // Define a test-specific address
-        registryInstance.setSlashedFundsRecipient(testInstanceSlashedFundsRecipient);
-
-        // Mint GPUCredit to providers
+        registryInstance = new ProviderRegistry(address(gpuCredit), admin, slasherRater, slasherRater);
+        registryInstance.setSlashedFundsRecipient(slashedFundsRecipientActual);
         gpuCredit.mint(provider1, INITIAL_MINT_TO_PROVIDER);
         gpuCredit.mint(provider2, INITIAL_MINT_TO_PROVIDER);
+        vm.stopPrank();
 
-        vm.stopPrank(); // End admin prank
+        // Ensure provider1 has some ETH for tests that might send ETH
+        vm.deal(provider1, 5 ether); // Give provider1 5 ETH
+        vm.deal(provider2, 5 ether); // Give provider2 5 ETH (good practice if it also makes calls)
 
-        // Providers approve the registryInstance to spend their GPUCredit for staking
+
         vm.startPrank(provider1);
         gpuCredit.approve(address(registryInstance), type(uint256).max);
         vm.stopPrank();
@@ -65,8 +58,8 @@ contract ProviderRegistryTest is Test, ProviderRegistry {
 
         vm.startPrank(provider1);
         vm.expectEmit(true, false, false, true, address(registryInstance));
-        emit ProviderStaked(provider1, STAKE_AMOUNT); // Describe expected event
-        registryInstance.stake(STAKE_AMOUNT); // Call function on the instance
+        emit ProviderStaked(provider1, STAKE_AMOUNT);
+        registryInstance.stake(STAKE_AMOUNT);
         vm.stopPrank();
 
         ProviderRegistry.ProviderInfo memory info = registryInstance.getProviderInfo(provider1);
@@ -76,26 +69,33 @@ contract ProviderRegistryTest is Test, ProviderRegistry {
         assertEq(gpuCredit.balanceOf(address(registryInstance)), initialRegistryBalance + STAKE_AMOUNT, "Registry balance incorrect after stake");
     }
 
-    function testFail_Stake_ZeroAmount() public {
+    function test_Stake_ZeroAmount_Reverts() public {
         vm.startPrank(provider1);
         vm.expectRevert(ProviderRegistry.AmountMustBePositive.selector);
         registryInstance.stake(0);
         vm.stopPrank();
     }
 
-    function testFail_Stake_InsufficientAllowance() public {
-        address provider3 = address(0x7);
-        vm.prank(admin); // Mint to provider3 but don't approve registry
+    function test_Stake_InsufficientAllowance_Reverts() public {
+        address provider3 = vm.addr(0x7);
+        vm.deal(provider3, 5 ether); // Ensure provider3 has ETH if it needs to pay gas
+        vm.prank(admin);
         gpuCredit.mint(provider3, STAKE_AMOUNT);
 
         vm.startPrank(provider3);
-        vm.expectRevert(bytes("ERC20: insufficient allowance"));
+        bytes memory expectedRevertData = abi.encodeWithSelector(
+            bytes4(keccak256("ERC20InsufficientAllowance(address,uint256,uint256)")),
+            address(registryInstance),
+            0,
+            STAKE_AMOUNT
+        );
+        vm.expectRevert(expectedRevertData);
         registryInstance.stake(STAKE_AMOUNT);
         vm.stopPrank();
     }
 
-    function testFail_Stake_SendEthWhenUsingToken() public {
-        vm.startPrank(provider1);
+    function test_Stake_SendEthWhenUsingToken_Reverts() public {
+        vm.startPrank(provider1); // provider1 has ETH from setUp
         vm.expectRevert(ProviderRegistry.NotUsingTokenStaking.selector);
         registryInstance.stake{value: 1 ether}(STAKE_AMOUNT);
         vm.stopPrank();
@@ -122,17 +122,24 @@ contract ProviderRegistryTest is Test, ProviderRegistry {
         assertEq(gpuCredit.balanceOf(address(registryInstance)), initialRegistryBalance - withdrawAmount);
     }
 
-    function testFail_Withdraw_MoreThanStaked() public {
+    function test_Withdraw_MoreThanStaked_Reverts() public {
         vm.prank(provider1);
         registryInstance.stake(STAKE_AMOUNT);
         vm.startPrank(provider1);
-        vm.expectRevert(ProviderRegistry.InsufficientStake.selector);
+
+        bytes memory expectedRevertData = abi.encodeWithSelector(
+            ProviderRegistry.InsufficientStake.selector,
+            STAKE_AMOUNT,
+            STAKE_AMOUNT + 1
+        );
+        vm.expectRevert(expectedRevertData);
         registryInstance.withdraw(STAKE_AMOUNT + 1);
         vm.stopPrank();
     }
 
-    function testFail_Withdraw_NonExistentProvider() public {
+    function test_Withdraw_NonExistentProvider_Reverts() public {
         address nonProvider = address(0x8);
+        vm.deal(nonProvider, 5 ether); // Ensure nonProvider has ETH if it needs to pay gas
         vm.startPrank(nonProvider);
         vm.expectRevert(ProviderRegistry.ProviderNotFound.selector);
         registryInstance.withdraw(1);
@@ -145,13 +152,13 @@ contract ProviderRegistryTest is Test, ProviderRegistry {
         registryInstance.stake(STAKE_AMOUNT);
 
         uint256 slashAmount = STAKE_AMOUNT / 4;
-        address currentSlashedRecipient = registryInstance.slashedFundsRecipient(); // Get from instance
+        address currentSlashedRecipient = registryInstance.slashedFundsRecipient();
         uint256 initialSlashedFundsRecipientBalance = gpuCredit.balanceOf(currentSlashedRecipient);
         uint256 initialRegistryBalance = gpuCredit.balanceOf(address(registryInstance));
 
-        vm.startPrank(jobManagerPlaceholder); // Slasher role
+        vm.startPrank(slasherRater);
         vm.expectEmit(true, true, false, true, address(registryInstance));
-        emit ProviderSlashed(provider1, jobManagerPlaceholder, slashAmount);
+        emit ProviderSlashed(provider1, slasherRater, slashAmount);
         registryInstance.slash(provider1, slashAmount);
         vm.stopPrank();
 
@@ -161,11 +168,20 @@ contract ProviderRegistryTest is Test, ProviderRegistry {
         assertEq(gpuCredit.balanceOf(address(registryInstance)), initialRegistryBalance - slashAmount);
     }
 
-    function testFail_Slash_WithoutRole() public {
+    function test_Slash_WithoutRole_Reverts() public {
         vm.prank(provider1);
         registryInstance.stake(STAKE_AMOUNT);
-        vm.startPrank(provider2); // provider2 doesn't have SLASHER_ROLE
-        vm.expectRevert(); // AccessControl generic revert
+
+        vm.startPrank(provider2); // provider2 has ETH from setUp
+
+        bytes32 slasherRole = registryInstance.SLASHER_ROLE();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                bytes4(keccak256("AccessControlUnauthorizedAccount(address,bytes32)")),
+                provider2,
+                slasherRole
+            )
+        );
         registryInstance.slash(provider1, STAKE_AMOUNT / 2);
         vm.stopPrank();
     }
@@ -173,12 +189,12 @@ contract ProviderRegistryTest is Test, ProviderRegistry {
     function test_Slash_MoreThanStaked_SlashesAll() public {
         vm.prank(provider1);
         registryInstance.stake(STAKE_AMOUNT);
-        address currentSlashedRecipient = registryInstance.slashedFundsRecipient(); // Get from instance
+        address currentSlashedRecipient = registryInstance.slashedFundsRecipient();
         uint256 initialSlashedFundsRecipientBalance = gpuCredit.balanceOf(currentSlashedRecipient);
 
-        vm.startPrank(jobManagerPlaceholder);
+        vm.startPrank(slasherRater);
         vm.expectEmit(true, true, false, true, address(registryInstance));
-        emit ProviderSlashed(provider1, jobManagerPlaceholder, STAKE_AMOUNT);
+        emit ProviderSlashed(provider1, slasherRater, STAKE_AMOUNT);
         registryInstance.slash(provider1, STAKE_AMOUNT * 2);
         vm.stopPrank();
 
@@ -193,13 +209,13 @@ contract ProviderRegistryTest is Test, ProviderRegistry {
         vm.prank(provider1);
         registryInstance.stake(STAKE_AMOUNT);
 
-        vm.startPrank(jobManagerPlaceholder); // Rater role
+        vm.startPrank(slasherRater);
         vm.expectEmit(true, true, false, true, address(registryInstance));
-        emit ProviderRated(provider1, jobManagerPlaceholder, true);
+        emit ProviderRated(provider1, slasherRater, true);
         registryInstance.rate(provider1, true);
 
         vm.expectEmit(true, true, false, true, address(registryInstance));
-        emit ProviderRated(provider1, jobManagerPlaceholder, false);
+        emit ProviderRated(provider1, slasherRater, false);
         registryInstance.rate(provider1, false);
         vm.stopPrank();
 
@@ -208,19 +224,27 @@ contract ProviderRegistryTest is Test, ProviderRegistry {
         assertEq(info.successfulJobs, 1);
     }
 
-    function testFail_Rate_WithoutRole() public {
+    function test_Rate_WithoutRole_Reverts() public {
         vm.prank(provider1);
         registryInstance.stake(STAKE_AMOUNT);
-        vm.startPrank(provider2); // Not a rater
-        vm.expectRevert();
+        vm.startPrank(provider2); // provider2 has ETH from setUp
+
+        bytes32 raterRole = registryInstance.RATER_ROLE();
+        vm.expectRevert(
+             abi.encodeWithSelector(
+                bytes4(keccak256("AccessControlUnauthorizedAccount(address,bytes32)")),
+                provider2,
+                raterRole
+            )
+        );
         registryInstance.rate(provider1, true);
         vm.stopPrank();
     }
 
-    function testFail_Rate_ProviderNotFound() public {
-        vm.startPrank(jobManagerPlaceholder); // Rater
+    function test_Rate_ProviderNotFound_Reverts() public {
+        vm.startPrank(slasherRater);
         vm.expectRevert(ProviderRegistry.ProviderNotFound.selector);
-        registryInstance.rate(address(0x999), true); // Non-existent provider
+        registryInstance.rate(address(0x999), true);
         vm.stopPrank();
     }
 
@@ -235,11 +259,99 @@ contract ProviderRegistryTest is Test, ProviderRegistry {
         assertEq(registryInstance.slashedFundsRecipient(), newRecipient);
     }
 
-    function testFail_SetSlashedFundsRecipient_NotAdmin() public {
+    function test_SetSlashedFundsRecipient_NotAdmin_Reverts() public {
         address newRecipient = address(0xABC);
-        vm.startPrank(provider1); // Not admin
-        vm.expectRevert();
+        vm.startPrank(provider1); // provider1 has ETH from setUp
+
+        bytes32 adminRole = registryInstance.DEFAULT_ADMIN_ROLE();
+         vm.expectRevert(
+             abi.encodeWithSelector(
+                bytes4(keccak256("AccessControlUnauthorizedAccount(address,bytes32)")),
+                provider1,
+                adminRole
+            )
+        );
         registryInstance.setSlashedFundsRecipient(newRecipient);
         vm.stopPrank();
+    }
+
+    function test_Stake_Token_ReStake() public {
+        vm.prank(provider1);
+        registryInstance.stake(STAKE_AMOUNT);
+
+        uint256 secondStakeAmount = STAKE_AMOUNT / 2;
+        uint256 initialProviderBalance = gpuCredit.balanceOf(provider1);
+        uint256 initialRegistryBalance = gpuCredit.balanceOf(address(registryInstance));
+
+        vm.startPrank(provider1);
+        vm.expectEmit(true, false, false, true, address(registryInstance));
+        emit ProviderStaked(provider1, secondStakeAmount);
+        registryInstance.stake(secondStakeAmount);
+        vm.stopPrank();
+
+        ProviderRegistry.ProviderInfo memory info = registryInstance.getProviderInfo(provider1);
+        assertEq(info.stakeAmount, STAKE_AMOUNT + secondStakeAmount);
+        assertEq(gpuCredit.balanceOf(provider1), initialProviderBalance - secondStakeAmount);
+        assertEq(gpuCredit.balanceOf(address(registryInstance)), initialRegistryBalance + secondStakeAmount);
+    }
+
+    function test_Withdraw_Token_AllStake() public {
+        vm.prank(provider1);
+        registryInstance.stake(STAKE_AMOUNT);
+        uint256 balProviderBefore = gpuCredit.balanceOf(provider1);
+
+        vm.startPrank(provider1);
+        vm.expectEmit(true, false, false, true, address(registryInstance));
+        emit ProviderWithdrew(provider1, STAKE_AMOUNT);
+        registryInstance.withdraw(STAKE_AMOUNT);
+        vm.stopPrank();
+
+        assertEq(registryInstance.getProviderInfo(provider1).stakeAmount, 0);
+        assertEq(gpuCredit.balanceOf(provider1), balProviderBefore + STAKE_AMOUNT);
+        assertEq(gpuCredit.balanceOf(address(registryInstance)), 0);
+    }
+
+    function test_Withdraw_Token_ZeroAmount_Reverts() public {
+        vm.prank(provider1);
+        registryInstance.stake(STAKE_AMOUNT);
+        vm.startPrank(provider1);
+        vm.expectRevert(ProviderRegistry.AmountMustBePositive.selector);
+        registryInstance.withdraw(0);
+        vm.stopPrank();
+    }
+
+    function test_Slash_Token_ZeroAmount_Reverts() public {
+        vm.prank(provider1);
+        registryInstance.stake(STAKE_AMOUNT);
+        vm.startPrank(slasherRater);
+        vm.expectRevert(ProviderRegistry.AmountMustBePositive.selector);
+        registryInstance.slash(provider1, 0);
+        vm.stopPrank();
+    }
+
+    function test_Slash_Token_ProviderNotFound_Reverts() public {
+        vm.startPrank(slasherRater);
+        vm.expectRevert(ProviderRegistry.ProviderNotFound.selector);
+        registryInstance.slash(vm.addr(0x99), STAKE_AMOUNT / 2);
+        vm.stopPrank();
+    }
+
+     function test_Slash_Token_SlashedFundsRecipientIsZero() public {
+        vm.prank(admin);
+        registryInstance.setSlashedFundsRecipient(address(0));
+
+        vm.prank(provider1);
+        registryInstance.stake(STAKE_AMOUNT);
+        uint256 balRegistryAfterStake = gpuCredit.balanceOf(address(registryInstance));
+
+        uint256 slashAmount = STAKE_AMOUNT / 4;
+        vm.startPrank(slasherRater);
+         vm.expectEmit(true, true, false, true, address(registryInstance));
+        emit ProviderSlashed(provider1, slasherRater, slashAmount);
+        registryInstance.slash(provider1, slashAmount);
+        vm.stopPrank();
+
+        assertEq(registryInstance.getProviderInfo(provider1).stakeAmount, STAKE_AMOUNT - slashAmount);
+        assertEq(gpuCredit.balanceOf(address(registryInstance)), balRegistryAfterStake);
     }
 }

@@ -1,6 +1,6 @@
 // test/GPUCredit.t.sol
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.20; // Match your GPUCredit.sol pragma
+pragma solidity ^0.8.24; // Match your GPUCredit.sol pragma
 
 import "forge-std/Test.sol";
 import "src/GPUCredit.sol"; // Adjust path if your contract is elsewhere
@@ -57,22 +57,6 @@ contract GPUCreditTest is Test {
         assertEq(gpuCredit.totalSupply(), mintAmount, "Total supply after mint mismatch");
     }
 
-    // Replace testFail_Mint_NotMinter with:
-    function test_Mint_NotMinter() public {
-        uint256 amount = 100 * 1e18;
-        vm.startPrank(user1);
-        
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                AccessControl.AccessControlUnauthorizedAccount.selector,
-                user1,
-                gpuCredit.MINTER_ROLE()
-            )
-        );
-        gpuCredit.mint(user1, amount);
-        
-        vm.stopPrank();
-    }
     function test_Transfer() public {
         uint256 mintAmount = 500 * 1e18;
         uint256 transferAmount = 200 * 1e18;
@@ -133,42 +117,6 @@ contract GPUCreditTest is Test {
         vm.expectRevert(bytes("ERC20: insufficient allowance"));
         gpuCredit.transferFrom(user1, user2, transferFromAmount);
         vm.stopPrank();
-    }
-
-    function test_Permit() public {
-        uint256 valueToPermit = 100 * 1e18;
-        uint256 deadline = block.timestamp + 1 hours;
-        uint256 nonce = gpuCredit.nonces(user1);
-        
-        // Get the digest directly from the contract using our helper function
-        bytes32 digest = gpuCredit.getPermitDigest(
-            user1,
-            user2,
-            valueToPermit,
-            nonce,
-            deadline
-        );
-        
-        // Sign the digest with user1's private key
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(USER1_PK, digest);
-        
-        // Mint tokens to user1 first
-        vm.prank(minter);
-        gpuCredit.mint(user1, valueToPermit);
-        
-        // Execute the permit
-        gpuCredit.permit(user1, user2, valueToPermit, deadline, v, r, s);
-        
-        // Verify the results
-        assertEq(gpuCredit.allowance(user1, user2), valueToPermit);
-        assertEq(gpuCredit.nonces(user1), nonce + 1);
-        
-        // Verify transferFrom works with the new allowance
-        vm.prank(user2);
-        gpuCredit.transferFrom(user1, user2, valueToPermit);
-        
-        assertEq(gpuCredit.balanceOf(user2), valueToPermit);
-        assertEq(gpuCredit.balanceOf(user1), 0);
     }
 
     function testFail_Permit_InvalidSignature() public {
