@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.24;
 
 import "forge-std/Script.sol";
 // Correct import paths relative to the `src` directory defined in foundry.toml
 import {GPUCredit} from "src/GPUCredit.sol";
 import {ProviderRegistry} from "src/ProviderRegistry.sol";
+import {JobManager} from "src/JobManager.sol";
 
 contract DeployContracts is Script {
     function run() external {
