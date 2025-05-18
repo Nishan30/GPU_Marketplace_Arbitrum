@@ -1,0 +1,10 @@
+[package]
+name = "method"
+version = "0.1.0"
+edition = "2021" 
+
+[dependencies]
+risc0-zkvm = { version = "^2.0.2", default-features = false }
+
+# serde needs the 'alloc' feature to handle Vec<u8> from the alloc crate.
+serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }

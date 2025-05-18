@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "es2020", // or newer like es2022
+    "module": "commonjs", // Crucial for Node.js backend with Express
+    "esModuleInterop": true, // Highly recommended
+    "forceConsistentCasingInFileNames": true,
+    "strict": true, // Good practice, but can be temporarily disabled for debugging
+    "skipLibCheck": true, // Can speed up compilation, might hide some lib errors
+    "outDir": "./dist", // Or your preferred output directory
+    "rootDir": "./src", // Or your source directory
+    "moduleResolution": "node", // Standard for Node.js
+    // Make sure "types" is not misconfigured if you have it.
+    // If "types" is present, ensure "@types/node" and "@types/express" are included or remove "types" to let TS auto-discover.
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "**/*.spec.ts"]
+}

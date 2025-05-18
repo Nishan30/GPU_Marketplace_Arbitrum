@@ -1,22 +1,33 @@
+# foundry.toml
+
 [profile.default]
-src = "src" # << THIS IS IMPORTANT. Contracts are in the 'src' directory.
+src = "src"
 out = "out"
 libs = ["lib"]
 test = "test"
 script = "script"
 cache_path = "cache_forge"
-solc_version = "0.8.24"
-# See more config options https://github.com/foundry-rs/foundry/tree/master/config
-
-# Example: Set default Solidity optimizer runs
+solc_version = "0.8.24" # Good to pin this
 optimizer = true
 optimizer_runs = 200
 
-# Example Arbitrum Sepolia profile
+# See more config options https://github.com/foundry-rs/foundry/tree/master/config
+
 [rpc_endpoints]
-# Replace with your actual RPC URL, loaded from .env
-arbitrumSepolia = "${ARB_SEPOLIA_RPC_URL}"
+# For Arbitrum Sepolia
+arbitrum_sepolia = "${ARB_SEPOLIA_RPC_URL}" # Ensure ARB_SEPOLIA_RPC_URL is defined in your .env
+
+# You can add other networks here, e.g.:
+# localhost = "http://127.0.0.1:8545"
+# mainnet = "${MAINNET_RPC_URL}"
 
 [etherscan]
-# Replace with your Arbiscan API Key, loaded from .env
-arbitrumSepolia = { key = "${ARBISCAN_API_KEY}", chain = 421614, url = "https://api-sepolia.arbiscan.io/api" } # Chain ID for Arbitrum Sepolia is 421614
+# Configuration for Arbitrum Sepolia on Arbiscan
+arbitrum_sepolia = { key = "${ARBISCAN_API_KEY}", chain = 421614, url = "https://api-sepolia.arbiscan.io/api" }
+# Ensure ARBISCAN_API_KEY is defined in your .env
+# The chain ID 421614 for Arbitrum Sepolia is correct.
+# The API URL https://api-sepolia.arbiscan.io/api for Arbitrum Sepolia is correct.
+
+# You can add configurations for other Etherscan-compatible explorers:
+# goerli = { key = "${ETHERSCAN_API_KEY}", chain = "goerli" }
+# mainnet = { key = "${ETHERSCAN_API_KEY}", chain = "mainnet" }
