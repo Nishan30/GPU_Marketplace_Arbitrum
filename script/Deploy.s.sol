@@ -32,12 +32,12 @@ contract DeployContracts is Script {
         console.log("ProviderRegistry deployed to:", address(registry));
 
         // Deploy JobManager
-        JobManager jobManager = new JobManager(address(registry), address(gpuCredit), admin);
-        console.log("JobManager deployed to:", address(jobManager));
+        //JobManager jobManager = new JobManager(address(registry), address(gpuCredit), admin);
+        //console.log("JobManager deployed to:", address(jobManager));
 
         // Grant JobManager necessary roles on ProviderRegistry
         // This assumes 'admin' is the DEFAULT_ADMIN_ROLE on ProviderRegistry
-        registry.grantRole(registry.RATER_ROLE(), address(jobManager));
+        //registry.grantRole(registry.RATER_ROLE(), address(jobManager));
         // registry.grantRole(registry.SLASHER_ROLE(), address(jobManager)); // If JobManager uses slash
         console.log("JobManager granted RATER_ROLE on ProviderRegistry");
 

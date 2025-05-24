@@ -77,12 +77,12 @@ contract CreateTestJob is Script {
         // 2. Call createJob on JobManager (NO {value: ...} here)
         // The parameters must match your JobManager.sol's createJob signature:
         // function createJob(string memory _jobDataCID, uint256 _paymentAmountGPUCredit, uint256 _deadlineTimestamp)
-        (uint256 jobId) = jobManager.createJob(cid, PAYMENT_AMOUNT_GPU_CREDIT, deadline);
+        //(uint256 jobId) = jobManager.createJob(cid, PAYMENT_AMOUNT_GPU_CREDIT, deadline);
 
         vm.stopBroadcast();
 
         console.log("Job creation transaction sent!");
-        console.log("New Job ID:", jobId);
+        //console.log("New Job ID:", jobId);
         console.log("Waiting for event in coordinator service (check its logs)...");
     }
 }

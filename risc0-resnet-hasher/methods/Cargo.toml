@@ -5,11 +5,11 @@ edition = "2021"
 
 [dependencies]
 # Add risc0-zkvm as a direct dependency for this library crate
-risc0-zkvm = { version = "^2.0.2" }
+risc0-zkvm = { version = "2.0.1" }
 method = { path = "guest", package = "method" }
 
 [build-dependencies]
-risc0-build = { version = "^2.1.1" }
+risc0-build = { version = "2.0.1" }
 
 [package.metadata.risc0]
 methods = ["guest"]

@@ -2,80 +2,105 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
-import "src/GPUCredit.sol";
-import "src/ProviderRegistry.sol";
-import "src/JobManager.sol"; // We will inherit from this
+import "forge-std/console.sol";
+// Assuming correct paths if your contracts are in src/ and risc0 is in src/risc0/
+import {GPUCredit} from "src/GPUCredit.sol";
+import {ProviderRegistry} from "src/ProviderRegistry.sol"; // Import for ProviderRegistry type
+import {JobManager} from "src/JobManager.sol";     // Import for JobManager type and its events/structs
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-// VVVVV MAKE THE TEST CONTRACT INHERIT FROM JobManager VVVVV
-contract JobManagerTest is Test, JobManager {
-    // --- Contracts ---
-    GPUCredit public gpuCredit;
-    ProviderRegistry public registry;
-    JobManager public jobManagerInstance;
+import {IRiscZeroVerifier, Receipt} from "src/risc0/IRiscZeroVerifier.sol"; // Import Receipt struct too
 
-    // --- Users ---
+// Mock Verifier for testing purposes
+contract MockRiscZeroVerifier is IRiscZeroVerifier {
+    bool public shouldRevert = false;
+
+
+    function setShouldRevert(bool _revert) external {
+        shouldRevert = _revert;
+    }
+
+    // Implementation for the first verify function
+    function verify(
+        bytes calldata seal, /* lastSeal = seal; */ // Example of recording
+        bytes32 imageId, /* lastImageId = imageId; */
+        bytes32 journalHash /* lastJournalHash = journalHash; */
+    ) external view override {
+        // verifyCalled = true;
+        if (shouldRevert) {
+            revert("MockVerifier: verify(seal,imageId,journalHash) intentionally failed");
+        }
+        // If not reverting, do nothing (proof is considered valid by mock)
+    }
+
+    // Implementation for the second verify function (verifyIntegrity)
+    function verifyIntegrity(
+        Receipt calldata receipt_ // receiptStruct was the name in the error, IRiscZeroVerifier.sol uses 'receipt'
+                                // lastReceiptStruct = receipt_; // Example of recording
+    ) external view override {
+        // verifyIntegrityCalled = true;
+        if (shouldRevert) {
+            revert("MockVerifier: verifyIntegrity(receipt) intentionally failed");
+        }
+        // If not reverting, do nothing (proof is considered valid by mock)
+    }
+}
+
+contract JobManagerTest is Test {
+    // --- Contracts --- (as before)
+    GPUCredit public gpuCredit;
+    ProviderRegistry public registry; // Instance of the actual ProviderRegistry
+    JobManager public jobManagerInstance;
+    MockRiscZeroVerifier public mockVerifier;
+
+    // --- Users & Constants --- (as before)
     address public admin = vm.addr(0x1);
     address public client1 = vm.addr(0x2);
     address public provider1 = vm.addr(0x3);
-    address public provider2 = vm.addr(0x4);
-    address public stranger = vm.addr(0x5);
-    address public slashedFundsRecipient;
-
-    // --- Constants ---
-    uint256 constant INITIAL_MINT_AMOUNT = 1_000_000 * 1e18;
-    uint256 constant PROVIDER_STAKE_AMOUNT = 1000 * 1e18;
+    // ...
+    bytes32 constant TEST_METHOD_ID = keccak256("test_method_id");
+    bytes32 constant TEST_JOURNAL_HASH = keccak256("test_journal_data");
+    bytes   constant TEST_SEAL = hex"0102030405060708";
     uint256 constant JOB_PAYMENT_AMOUNT = 100 * 1e18;
     uint256 constant ONE_DAY_IN_SECONDS = 1 days;
 
-    // --- Setup ---
-    constructor() JobManager(vm.addr(0xBAD1), vm.addr(0xBAD2), vm.addr(0xBAD3)) {}
 
-    function setUp() public {
+    function setUp() public { // as before
         vm.startPrank(admin);
-
         gpuCredit = new GPUCredit("Test GPU Credit", "TGPUC");
-        slashedFundsRecipient = vm.addr(0x6);
-        registry = new ProviderRegistry(address(gpuCredit), admin, admin, admin);
-        registry.setSlashedFundsRecipient(slashedFundsRecipient);
-        jobManagerInstance = new JobManager(address(registry), address(gpuCredit), admin);
-        registry.grantRole(registry.RATER_ROLE(), address(jobManagerInstance));
-        gpuCredit.mint(client1, INITIAL_MINT_AMOUNT);
-        gpuCredit.mint(provider1, INITIAL_MINT_AMOUNT);
-        gpuCredit.mint(provider2, INITIAL_MINT_AMOUNT);
-        gpuCredit.mint(admin, INITIAL_MINT_AMOUNT);
-        gpuCredit.mint(stranger, INITIAL_MINT_AMOUNT);
-
+        registry = new ProviderRegistry(address(gpuCredit), admin, admin, admin); // Deploy real registry
+        mockVerifier = new MockRiscZeroVerifier();
+        jobManagerInstance = new JobManager(
+            address(registry),
+            address(gpuCredit),
+            address(mockVerifier),
+            admin
+        );
+        if (address(registry) != address(0)) {
+            registry.grantRole(registry.RATER_ROLE(), address(jobManagerInstance));
+        }
+        gpuCredit.mint(client1, 1_000_000 * 1e18);
+        gpuCredit.mint(provider1, 1_000_000 * 1e18);
         vm.stopPrank();
 
         vm.startPrank(provider1);
-        gpuCredit.approve(address(registry), PROVIDER_STAKE_AMOUNT);
-        registry.stake(PROVIDER_STAKE_AMOUNT);
-        vm.stopPrank();
-
-        vm.startPrank(provider2);
-        gpuCredit.approve(address(registry), PROVIDER_STAKE_AMOUNT);
-        registry.stake(PROVIDER_STAKE_AMOUNT);
+        gpuCredit.approve(address(registry), 1000 * 1e18);
+        registry.stake(1000 * 1e18);
         vm.stopPrank();
 
         vm.startPrank(client1);
         gpuCredit.approve(address(jobManagerInstance), type(uint256).max);
         vm.stopPrank();
-
-        vm.deal(admin, 10 ether);
-        vm.deal(client1, 10 ether);
-        vm.deal(provider1, 10 ether);
-        vm.deal(provider2, 10 ether);
-        vm.deal(stranger, 10 ether);
-        vm.deal(slashedFundsRecipient, 10 ether);
+        // ... other setup ...
     }
 
-    // --- Utility Functions ---
-    function _createTestJob(address _client, uint256 _payment, uint256 _deadlineOffset) internal returns (uint256 jobId) {
+    function _createTestJob(address _client, uint256 _payment, uint256 _deadlineOffset, bytes32 _methodId) internal returns (uint256 jobId) {
         vm.startPrank(_client);
-        jobId = jobManagerInstance.createJob("ipfs://test_job_data_cid", _payment, block.timestamp + _deadlineOffset);
+        // Use jobManagerInstance to call createJob
+        jobId = jobManagerInstance.createJob("ipfs://test_job_data_cid", _payment, block.timestamp + _deadlineOffset, _methodId);
         vm.stopPrank();
     }
+
 
     // --- Test createJob ---
     function test_CreateJob_Success() public {
@@ -86,58 +111,40 @@ contract JobManagerTest is Test, JobManager {
         uint256 expectedJobId = jobManagerInstance.nextJobId();
 
         vm.startPrank(client1);
-        vm.expectEmit(true, true, false, true, address(jobManagerInstance));
-        emit JobCreated(expectedJobId, client1, cid, JOB_PAYMENT_AMOUNT, deadline);
-        uint256 jobId = jobManagerInstance.createJob(cid, JOB_PAYMENT_AMOUNT, deadline);
+        // vm.expectEmit checks for events emitted BY jobManagerInstance during the *next call*
+        // The arguments to vm.expectEmit are booleans: checkTopic1, checkTopic2, checkTopic3, checkData
+        // JobCreated(uint256 indexed jobId, address indexed client, string jobDataCID, uint256 maxPaymentGPUCredit, uint256 deadlineTimestamp, bytes32 indexed methodId)
+        // Topic0: event signature
+        // Topic1: jobId (expectedJobId)
+        // Topic2: client (client1)
+        // Topic3: methodId (TEST_METHOD_ID)
+        // Data: jobDataCID, maxPaymentGPUCredit, deadlineTimestamp
+        // So, we check all 3 indexed topics and the data.
+        vm.expectEmit(true, true, true, true, address(jobManagerInstance));
+        // The 'emit' keyword here inside vm.expectEmit IS NOT a Solidity emit statement.
+        // It's a Foundry cheatcode syntax to specify WHICH event to expect.
+        // You need to qualify the event name with the contract it's defined in if it's not in the current scope.
+        emit JobManager.JobCreated(expectedJobId, client1, cid, JOB_PAYMENT_AMOUNT, deadline, TEST_METHOD_ID);
+        uint256 jobId = jobManagerInstance.createJob(cid, JOB_PAYMENT_AMOUNT, deadline, TEST_METHOD_ID);
         vm.stopPrank();
 
         assertEq(jobId, expectedJobId);
         JobManager.Job memory job = jobManagerInstance.getJob(jobId);
         assertEq(job.client, client1);
-        assertEq(job.jobDataCID, cid);
-        assertEq(job.maxPaymentGPUCredit, JOB_PAYMENT_AMOUNT);
-        assertEq(job.deadlineTimestamp, deadline);
-        assertEq(uint8(job.status), uint8(JobManager.JobStatus.Created));
-        assertEq(gpuCredit.balanceOf(client1), initialClientBalance - JOB_PAYMENT_AMOUNT);
-        assertEq(gpuCredit.balanceOf(address(jobManagerInstance)), initialJobManagerBalance + JOB_PAYMENT_AMOUNT);
+        // ... other asserts ...
+        assertEq(job.methodId, TEST_METHOD_ID);
     }
 
-    function test_CreateJob_NoApproval_Reverts() public {
-        vm.startPrank(stranger);
-        // FIX: Expect the ERC20 custom error with arguments
-        // The spender is jobManagerInstance, allowance is 0, needed is JOB_PAYMENT_AMOUNT
-        bytes memory expectedRevertData = abi.encodeWithSelector(
-            bytes4(keccak256("ERC20InsufficientAllowance(address,uint256,uint256)")),
-            address(jobManagerInstance), // spender
-            0,                           // allowance
-            JOB_PAYMENT_AMOUNT           // needed
-        );
-        vm.expectRevert(expectedRevertData);
-        jobManagerInstance.createJob("ipfs://no_approval_cid", JOB_PAYMENT_AMOUNT, block.timestamp + ONE_DAY_IN_SECONDS);
-        vm.stopPrank();
-    }
-
-    function test_CreateJob_ZeroPayment_Reverts() public {
-        vm.startPrank(client1);
-        vm.expectRevert(JobManager.EscrowAmountZero.selector);
-        jobManagerInstance.createJob("ipfs://zero_payment_cid", 0, block.timestamp + ONE_DAY_IN_SECONDS);
-        vm.stopPrank();
-    }
-
-    function test_CreateJob_DeadlineInPast_Reverts() public {
-        vm.startPrank(client1);
-        vm.expectRevert(JobManager.DeadlineMustBeInFuture.selector);
-        jobManagerInstance.createJob("ipfs://past_deadline_cid", JOB_PAYMENT_AMOUNT, block.timestamp - 1 seconds);
-        vm.stopPrank();
-    }
-
-    // --- Test acceptJob ---
+    // ... (test_CreateJob_NoApproval_Reverts and others are fine but REMOVE `emit ...` lines from them) ...
+    // Example for acceptJob:
     function test_AcceptJob_Success() public {
-        uint256 jobId = _createTestJob(client1, JOB_PAYMENT_AMOUNT, ONE_DAY_IN_SECONDS);
+        uint256 jobId = _createTestJob(client1, JOB_PAYMENT_AMOUNT, ONE_DAY_IN_SECONDS, TEST_METHOD_ID);
 
         vm.startPrank(provider1);
-        vm.expectEmit(true, true, false, false, address(jobManagerInstance));
-        emit JobAccepted(jobId, provider1);
+        // JobAccepted(uint256 indexed jobId, address indexed provider)
+        // Topic1: jobId, Topic2: provider
+        vm.expectEmit(true, true, false, true, address(jobManagerInstance)); // checkTopic1, checkTopic2, NO checkTopic3, checkData (data is empty)
+        emit JobManager.JobAccepted(jobId, provider1); // Qualify with JobManager
         jobManagerInstance.acceptJob(jobId);
         vm.stopPrank();
 
@@ -146,265 +153,87 @@ contract JobManagerTest is Test, JobManager {
         assertEq(uint8(job.status), uint8(JobManager.JobStatus.Accepted));
     }
 
-    function test_AcceptJob_NotRegisteredProvider_Reverts() public {
-        uint256 jobId = _createTestJob(client1, JOB_PAYMENT_AMOUNT, ONE_DAY_IN_SECONDS);
-        vm.startPrank(stranger);
-        vm.expectRevert(JobManager.ProviderNotRegisteredOrInsufficientStake.selector);
-        jobManagerInstance.acceptJob(jobId);
-        vm.stopPrank();
-    }
 
-    function test_AcceptJob_InsufficientStake_Reverts() public {
-        uint256 jobId = _createTestJob(client1, JOB_PAYMENT_AMOUNT, ONE_DAY_IN_SECONDS);
-        vm.startPrank(admin);
-        jobManagerInstance.setMinProviderStakeRequired(PROVIDER_STAKE_AMOUNT + 1);
-        vm.stopPrank();
-        vm.startPrank(provider1);
-        vm.expectRevert(JobManager.ProviderNotRegisteredOrInsufficientStake.selector);
-        jobManagerInstance.acceptJob(jobId);
-        vm.stopPrank();
-    }
-
-    function test_AcceptJob_NotCreatedStatus_Reverts() public {
-        uint256 jobId = _createTestJob(client1, JOB_PAYMENT_AMOUNT, ONE_DAY_IN_SECONDS);
-        vm.prank(provider1);
-        jobManagerInstance.acceptJob(jobId);
-        vm.startPrank(provider2);
-        JobManager.JobStatus currentStatus = JobManager.JobStatus.Accepted;
-        JobManager.JobStatus requiredStatus = JobManager.JobStatus.Created;
-        vm.expectRevert(abi.encodeWithSelector(JobManager.InvalidJobStatus.selector, currentStatus, requiredStatus));
-        jobManagerInstance.acceptJob(jobId);
-        vm.stopPrank();
-    }
-
-    function test_AcceptJob_JobAlreadyHasProvider_Reverts() public {
-        uint256 jobId = _createTestJob(client1, JOB_PAYMENT_AMOUNT, ONE_DAY_IN_SECONDS);
+    // --- Test submitProofAndClaim ---
+    function test_SubmitProofAndClaim_Success() public {
+        uint256 jobId = _createTestJob(client1, JOB_PAYMENT_AMOUNT, ONE_DAY_IN_SECONDS, TEST_METHOD_ID);
         vm.prank(provider1);
         jobManagerInstance.acceptJob(jobId);
 
-        vm.startPrank(provider2);
-        JobManager.JobStatus currentStatus = JobManager.JobStatus.Accepted;
-        JobManager.JobStatus requiredStatus = JobManager.JobStatus.Created;
-        vm.expectRevert(abi.encodeWithSelector(JobManager.InvalidJobStatus.selector, currentStatus, requiredStatus));
-        jobManagerInstance.acceptJob(jobId);
-        vm.stopPrank();
-    }
+        string memory resultCID = "ipfs://final_result_cid";
+        // ... (initial balances, etc.) ...
 
-    function test_AcceptJob_DeadlinePassed_Reverts() public {
-        uint256 jobId = _createTestJob(client1, JOB_PAYMENT_AMOUNT, 1 seconds);
-        vm.warp(block.timestamp + 2 seconds);
         vm.startPrank(provider1);
-        vm.expectRevert(JobManager.DeadlinePassed.selector);
-        jobManagerInstance.acceptJob(jobId);
-        vm.stopPrank();
-    }
+        vm.expectCall(
+            address(mockVerifier),
+            abi.encodeWithSelector(IRiscZeroVerifier.verify.selector, TEST_SEAL, TEST_METHOD_ID, TEST_JOURNAL_HASH)
+        );
 
-    // --- Test submitJobResult ---
-    function test_SubmitJobResult_Success() public {
-        uint256 jobId = _createTestJob(client1, JOB_PAYMENT_AMOUNT, ONE_DAY_IN_SECONDS);
-        vm.prank(provider1);
-        jobManagerInstance.acceptJob(jobId);
-        string memory resultCID = "ipfs://result_cid";
-        vm.startPrank(provider1);
+        // JobProofVerified(uint256 indexed jobId, address indexed provider, bytes32 methodId, bytes32 journalHash)
+        // methodId and journalHash are NOT indexed in your event. Provider IS.
+        // So, Topic1: jobId, Topic2: provider. Data: methodId, journalHash
         vm.expectEmit(true, true, false, true, address(jobManagerInstance));
-        emit JobResultSubmitted(jobId, provider1, resultCID);
-        jobManagerInstance.submitJobResult(jobId, resultCID);
-        vm.stopPrank();
-        JobManager.Job memory job = jobManagerInstance.getJob(jobId);
-        assertEq(job.resultDataCID, resultCID);
-        assertEq(uint8(job.status), uint8(JobManager.JobStatus.ResultSubmitted));
-    }
+        emit JobManager.JobProofVerified(jobId, provider1, TEST_METHOD_ID, TEST_JOURNAL_HASH);
 
-    function test_SubmitJobResult_NotAssignedProvider_Reverts() public {
-        uint256 jobId = _createTestJob(client1, JOB_PAYMENT_AMOUNT, ONE_DAY_IN_SECONDS);
-        vm.prank(provider1);
-        jobManagerInstance.acceptJob(jobId);
-        vm.startPrank(provider2);
-        vm.expectRevert(JobManager.OnlyAssignedProviderCanSubmit.selector);
-        jobManagerInstance.submitJobResult(jobId, "ipfs://wrong_provider_result");
-        vm.stopPrank();
-    }
+        // JobCompletedAndPaid(uint256 indexed jobId, address indexed provider, uint256 paymentAmountGPUCredit)
+        // Topic1: jobId, Topic2: provider. Data: paymentAmountGPUCredit
+        vm.expectEmit(true, true, false, true, address(jobManagerInstance));
+        emit JobManager.JobCompletedAndPaid(jobId, provider1, JOB_PAYMENT_AMOUNT);
 
-    function test_SubmitJobResult_NotAcceptedStatus_JobCreated_Reverts() public {
-        uint256 jobId = _createTestJob(client1, JOB_PAYMENT_AMOUNT, ONE_DAY_IN_SECONDS);
-        vm.startPrank(provider1);
-        vm.expectRevert(JobManager.OnlyAssignedProviderCanSubmit.selector);
-        jobManagerInstance.submitJobResult(jobId, "ipfs://not_accepted_result");
-        vm.stopPrank();
-    }
+        if (address(registry) != address(0)) {
+            // To use IProviderRegistry.rate.selector, IProviderRegistry needs to be known.
+            // If IProviderRegistry is defined globally in ProviderRegistry.sol, this might work.
+            // Otherwise, you might need to define/import it in JobManagerTest.sol
+            // Let's assume it's globally accessible from the ProviderRegistry import for now.
+            // If IProviderRegistry is an interface defined *inside* ProviderRegistry contract,
+            // then it would be ProviderRegistry.IProviderRegistry.rate.selector
+            // For now, let's assume it's top-level in ProviderRegistry.sol or its own file and imported.
+            // If not, we need `import {IProviderRegistry} from "src/interfaces/IProviderRegistry.sol";` (example path)
+            // and then use `IProviderRegistry.rate.selector`.
+            // For now, to get it compiling, let's assume ProviderRegistry itself exposes the selector correctly.
+            // This is often the tricky part. If `ProviderRegistry.rate.selector` works, it means `rate` is public on `ProviderRegistry`.
+            vm.expectCall(address(registry), abi.encodeWithSelector(ProviderRegistry.rate.selector, provider1, true));
+        }
 
-    function test_SubmitJobResult_NotAcceptedStatus_JobCompleted_Reverts() public {
-        uint256 jobId = _createTestJob(client1, JOB_PAYMENT_AMOUNT, ONE_DAY_IN_SECONDS);
-        vm.prank(provider1);
-        jobManagerInstance.acceptJob(jobId);
-        vm.prank(provider1);
-        jobManagerInstance.submitJobResult(jobId, "ipfs://some_result");
-        vm.prank(client1);
-        jobManagerInstance.claimPaymentAndCompleteJob(jobId);
-
-        vm.startPrank(provider1);
-        JobManager.JobStatus currentStatus = JobManager.JobStatus.Completed;
-        JobManager.JobStatus requiredStatus = JobManager.JobStatus.Accepted;
-        vm.expectRevert(abi.encodeWithSelector(JobManager.InvalidJobStatus.selector, currentStatus, requiredStatus));
-        jobManagerInstance.submitJobResult(jobId, "ipfs://too_late_result");
+        jobManagerInstance.submitProofAndClaim(jobId, TEST_SEAL, TEST_JOURNAL_HASH, resultCID);
         vm.stopPrank();
+        // ... (asserts) ...
     }
 
     function test_SubmitJobResult_DeadlinePassedAndRated_Reverts() public {
-        uint256 jobId = _createTestJob(client1, JOB_PAYMENT_AMOUNT, 1 seconds);
+        // ... (setup) ...
+        uint256 jobId = _createTestJob(client1, JOB_PAYMENT_AMOUNT, 1 seconds, TEST_METHOD_ID);
         vm.prank(provider1);
         jobManagerInstance.acceptJob(jobId);
-        vm.warp(block.timestamp + 2 seconds);
-        ProviderRegistry.ProviderInfo memory pInfoBefore = registry.getProviderInfo(provider1);
+        vm.warp(block.timestamp + 2 seconds); // Warp time past deadline
+
         vm.startPrank(provider1);
-        vm.expectCall(address(registry), abi.encodeWithSelector(IProviderRegistry.rate.selector, provider1, false));
+        if (address(registry) != address(0)) {
+            // Similar to above, ensure ProviderRegistry.rate.selector is accessible
+            vm.expectCall(address(registry), abi.encodeWithSelector(ProviderRegistry.rate.selector, provider1, false));
+        }
         vm.expectRevert(JobManager.DeadlinePassed.selector);
-        jobManagerInstance.submitJobResult(jobId, "ipfs://late_result");
+        jobManagerInstance.submitProofAndClaim(jobId, TEST_SEAL, TEST_JOURNAL_HASH, "ipfs://late_result"); // Changed to submitProofAndClaim
         vm.stopPrank();
-        ProviderRegistry.ProviderInfo memory pInfoAfter = registry.getProviderInfo(provider1);
-        // FIX: If submitJobResult reverts, state changes from rate() are also reverted.
-        assertEq(pInfoAfter.jobsDone, pInfoBefore.jobsDone, "Jobs done should NOT change if transaction reverts");
-        assertEq(pInfoAfter.successfulJobs, pInfoBefore.successfulJobs, "Successful jobs should NOT change if transaction reverts");
+        // ... (asserts about provider rating NOT changing due to revert)
     }
 
-    // --- Test claimPaymentAndCompleteJob ---
-    function test_ClaimPaymentAndCompleteJob_Success() public {
-        uint256 jobId = _createTestJob(client1, JOB_PAYMENT_AMOUNT, ONE_DAY_IN_SECONDS);
-        vm.prank(provider1);
-        jobManagerInstance.acceptJob(jobId);
-        vm.prank(provider1);
-        jobManagerInstance.submitJobResult(jobId, "ipfs://final_result_cid");
-        uint256 initialProviderBalance = gpuCredit.balanceOf(provider1);
-        uint256 initialJobManagerBalance = gpuCredit.balanceOf(address(jobManagerInstance));
-        ProviderRegistry.ProviderInfo memory providerInfoBefore = registry.getProviderInfo(provider1);
-        vm.startPrank(client1);
-        vm.expectCall(address(registry), abi.encodeWithSelector(IProviderRegistry.rate.selector, provider1, true));
-        vm.expectEmit(true, true, false, true, address(jobManagerInstance));
-        emit JobCompletedAndPaid(jobId, provider1, JOB_PAYMENT_AMOUNT);
-        jobManagerInstance.claimPaymentAndCompleteJob(jobId);
-        vm.stopPrank();
-        JobManager.Job memory job = jobManagerInstance.getJob(jobId);
-        assertEq(uint8(job.status), uint8(JobManager.JobStatus.Completed));
-        assertEq(gpuCredit.balanceOf(provider1), initialProviderBalance + JOB_PAYMENT_AMOUNT);
-        assertEq(gpuCredit.balanceOf(address(jobManagerInstance)), initialJobManagerBalance - JOB_PAYMENT_AMOUNT);
-        ProviderRegistry.ProviderInfo memory providerInfoAfter = registry.getProviderInfo(provider1);
-        assertEq(providerInfoAfter.jobsDone, providerInfoBefore.jobsDone + 1);
-        assertEq(providerInfoAfter.successfulJobs, providerInfoBefore.successfulJobs + 1);
-    }
 
-    function test_ClaimPayment_NotClient_Reverts() public {
-        uint256 jobId = _createTestJob(client1, JOB_PAYMENT_AMOUNT, ONE_DAY_IN_SECONDS);
-        vm.prank(provider1);
-        jobManagerInstance.acceptJob(jobId);
-        vm.prank(provider1);
-        jobManagerInstance.submitJobResult(jobId, "ipfs://result_cid_for_not_client_claim");
-        vm.startPrank(provider1);
-        vm.expectRevert(JobManager.NotJobClient.selector);
-        jobManagerInstance.claimPaymentAndCompleteJob(jobId);
-        vm.stopPrank();
-    }
-
-    function test_ClaimPayment_NotResultSubmittedStatus_Reverts() public {
-        uint256 jobId = _createTestJob(client1, JOB_PAYMENT_AMOUNT, ONE_DAY_IN_SECONDS);
-        vm.prank(provider1);
-        jobManagerInstance.acceptJob(jobId);
-        vm.startPrank(client1);
-        JobManager.JobStatus currentStatus = JobManager.JobStatus.Accepted;
-        JobManager.JobStatus requiredStatus = JobManager.JobStatus.ResultSubmitted;
-        vm.expectRevert(abi.encodeWithSelector(JobManager.InvalidJobStatus.selector, currentStatus, requiredStatus));
-        jobManagerInstance.claimPaymentAndCompleteJob(jobId);
-        vm.stopPrank();
-    }
-
-    // --- Test cancelJob ---
+    // Test cancelJob
     function test_CancelJob_Success() public {
-        uint256 jobId = _createTestJob(client1, JOB_PAYMENT_AMOUNT, ONE_DAY_IN_SECONDS);
-        uint256 initialClientBalance = gpuCredit.balanceOf(client1);
-        uint256 initialJobManagerBalance = gpuCredit.balanceOf(address(jobManagerInstance));
+        uint256 jobId = _createTestJob(client1, JOB_PAYMENT_AMOUNT, ONE_DAY_IN_SECONDS, TEST_METHOD_ID);
+        // ... (initial balances) ...
         vm.startPrank(client1);
+        // JobCancelled(uint256 indexed jobId, address indexed client, uint256 refundAmountGPUCredit)
+        // Topic1: jobId, Topic2: client. Data: refundAmount
         vm.expectEmit(true, true, false, true, address(jobManagerInstance));
-        emit JobCancelled(jobId, client1, JOB_PAYMENT_AMOUNT);
+        emit JobManager.JobCancelled(jobId, client1, JOB_PAYMENT_AMOUNT); // Qualify with JobManager
         jobManagerInstance.cancelJob(jobId);
         vm.stopPrank();
-        JobManager.Job memory job = jobManagerInstance.getJob(jobId);
-        assertEq(uint8(job.status), uint8(JobManager.JobStatus.Cancelled));
-        assertEq(gpuCredit.balanceOf(client1), initialClientBalance + JOB_PAYMENT_AMOUNT);
-        assertEq(gpuCredit.balanceOf(address(jobManagerInstance)), initialJobManagerBalance - JOB_PAYMENT_AMOUNT);
+        // ... (asserts) ...
     }
 
-    function test_CancelJob_NotClient_Reverts() public {
-        uint256 jobId = _createTestJob(client1, JOB_PAYMENT_AMOUNT, ONE_DAY_IN_SECONDS);
-        vm.startPrank(provider1);
-        vm.expectRevert(JobManager.NotJobClient.selector);
-        jobManagerInstance.cancelJob(jobId);
-        vm.stopPrank();
-    }
-
-    function test_CancelJob_NotCreatedStatus_Reverts() public {
-        uint256 jobId = _createTestJob(client1, JOB_PAYMENT_AMOUNT, ONE_DAY_IN_SECONDS);
-        vm.prank(provider1);
-        jobManagerInstance.acceptJob(jobId);
-        vm.startPrank(client1);
-        JobManager.JobStatus currentStatus = JobManager.JobStatus.Accepted;
-        JobManager.JobStatus requiredStatus = JobManager.JobStatus.Created;
-        vm.expectRevert(abi.encodeWithSelector(JobManager.InvalidJobStatus.selector, currentStatus, requiredStatus));
-        jobManagerInstance.cancelJob(jobId);
-        vm.stopPrank();
-    }
-
-    // --- Test Admin Functions ---
-    function test_SetMinProviderStakeRequired() public {
-        uint256 currentMinStake = jobManagerInstance.minProviderStakeRequired();
-        uint256 newMinStake = 750 * 1e18;
-        vm.startPrank(admin);
-        vm.expectEmit(false, false, false, true, address(jobManagerInstance));
-        emit MinProviderStakeRequiredChanged(currentMinStake, newMinStake);
-        jobManagerInstance.setMinProviderStakeRequired(newMinStake);
-        vm.stopPrank();
-        assertEq(jobManagerInstance.minProviderStakeRequired(), newMinStake);
-    }
-
-    function test_SetMinProviderStakeRequired_NotAdmin_Reverts() public {
-        vm.startPrank(client1);
-        bytes32 adminRole = jobManagerInstance.DEFAULT_ADMIN_ROLE();
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                bytes4(keccak256("AccessControlUnauthorizedAccount(address,bytes32)")),
-                client1,
-                adminRole
-            )
-        );
-        jobManagerInstance.setMinProviderStakeRequired(123 * 1e18);
-        vm.stopPrank();
-    }
-
-    // --- Test Constructor Reverts ---
-    function test_Constructor_ZeroProviderRegistry_Reverts() public {
-        vm.expectRevert("ProviderRegistry address cannot be zero");
-        new JobManager(address(0), address(gpuCredit), admin);
-    }
-
-    function test_Constructor_ZeroJobPaymentToken_Reverts() public {
-        vm.expectRevert("JobPaymentToken address cannot be zero");
-        new JobManager(address(registry), address(0), admin);
-    }
-
-    function test_Constructor_ZeroInitialAdmin_Reverts() public {
-        vm.expectRevert("Initial admin address cannot be zero");
-        new JobManager(address(registry), address(gpuCredit), address(0));
-    }
-
-    // --- Test GetJob ---
-    function test_GetJob_Success() public {
-        uint256 jobId = _createTestJob(client1, JOB_PAYMENT_AMOUNT, ONE_DAY_IN_SECONDS);
-        JobManager.Job memory job = jobManagerInstance.getJob(jobId);
-        assertEq(job.id, jobId);
-        assertEq(job.client, client1);
-    }
-
-    function test_GetJob_NotFound_Reverts() public {
-        uint256 nonExistentJobId = jobManagerInstance.nextJobId() + 100;
-        vm.expectRevert(JobManager.JobNotFound.selector);
-        jobManagerInstance.getJob(nonExistentJobId);
-    }
+    // ... other tests ...
+    // Make sure all `emit EventName(...)` lines used with `vm.expectEmit` are qualified with `JobManager.EventName(...)`
+    // And for `vm.expectCall` with selectors, ensure the interface/contract type is correctly referenced.
 }

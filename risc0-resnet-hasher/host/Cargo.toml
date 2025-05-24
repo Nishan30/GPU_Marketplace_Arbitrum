@@ -6,7 +6,8 @@ edition = "2021"
 [dependencies]
 methods = { path = "../methods" }
 method = { path = "../methods/guest" }
-risc0-zkvm = { version = "^2.0.2" }
+risc0-zkvm = "2.0.1"        # latest 1.0.x (e.g. 1.0.3)
+risc0-groth16 = "2.0.1" 
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = "1.0"
 hex = "0.4"
@@ -15,3 +16,4 @@ ethers = { version = "2.0", features = ["abigen", "rustls"] } # Or web3 / alloy-
 tokio = { version = "1", features = ["full"] }
 dotenv = "0.15" # For managing private keys and RPC URLs
 hex-literal = "0.4" # For hardcoding addresses if not using .env
+eyre = "0.6"
